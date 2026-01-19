@@ -48,11 +48,11 @@ class LogHandler:
         
         # Màu sắc theo level
         colors = {
-            "INFO": "#4ade80",      # green
-            "WARNING": "#fbbf24",   # yellow  
-            "ERROR": "#f87171",     # red
-            "SUCCESS": "#22d3ee",   # cyan
-            "DEBUG": "#a78bfa"      # purple
+            "INFO": "#0ea5e9",
+            "WARNING": "#f59e0b",
+            "ERROR": "#ef4444",
+            "SUCCESS": "#22c55e",
+            "DEBUG": "#6366f1"
         }
         color = colors.get(level, "#ffffff")
         
@@ -111,6 +111,7 @@ class AutoLoginFlowUI:
         self.screen_width = 1080
         self.screen_height = 1920
         self.running = False
+        self.stop_requested = False
         
     def _parse_credentials(self):
         """Parse credentials từ format: user|pass|mail_data"""
@@ -133,18 +134,32 @@ class AutoLoginFlowUI:
         except Exception as e:
             self.logger.error(f"Error parsing credentials: {e}")
 
+    def _sleep(self, seconds: float, interval: float = 0.2) -> bool:
+        if seconds <= 0:
+            return self.running
+        end_time = time.time() + seconds
+        while self.running and time.time() < end_time:
+            remaining = end_time - time.time()
+            time.sleep(min(interval, max(0.0, remaining)))
+        return self.running
+
     def _tap_ratio(self, x_ratio: float, y_ratio: float, wait: float = 0.0):
+        if not self.running:
+            return False
         x = int(self.screen_width * x_ratio)
         y = int(self.screen_height * y_ratio)
         self.logger.info(f"Tapping at ({x_ratio:.3f}, {y_ratio:.3f}) -> ({x}, {y})")
         if MODULES_AVAILABLE:
             self.adb.tap(self.serial, x, y)
         if wait > 0:
-            time.sleep(wait)
+            return self._sleep(wait)
+        return self.running
 
     def _wait_for_text(self, text: str, timeout: Optional[float] = 60.0, interval: float = 1.0) -> bool:
+        if not self.running:
+            return False
         if not MODULES_AVAILABLE:
-            return True
+            return self.running
         start_time = time.time()
         while self.running:
             elements = self.element_finder.find_by_text(
@@ -154,13 +169,16 @@ class AutoLoginFlowUI:
                 return True
             if timeout is not None and time.time() - start_time >= timeout:
                 return False
-            time.sleep(interval)
+            if not self._sleep(interval):
+                return False
         return False
 
     def _wait_and_tap_resource_id(self, resource_id: str, fallback_ratio=None,
                                    timeout: float = 30.0, interval: float = 1.0) -> bool:
+        if not self.running:
+            return False
         if not MODULES_AVAILABLE:
-            return True
+            return self.running
         start_time = time.time()
         while self.running and time.time() - start_time < timeout:
             elements = self.element_finder.find_elements(
@@ -175,7 +193,8 @@ class AutoLoginFlowUI:
                 self.logger.info(f"Found element '{resource_id}' at ({cx}, {cy})")
                 self.adb.tap(self.serial, cx, cy)
                 return True
-            time.sleep(interval)
+            if not self._sleep(interval):
+                return False
         return False
 
     def fetch_shopee_link_from_mail(self, mail_data: str, retry_interval: float = 5.0) -> Optional[str]:
@@ -183,6 +202,8 @@ class AutoLoginFlowUI:
         
         Mail data format: email|mail_pass|refresh_token|client_id|smvmail
         """
+        if not self.running:
+            return None
         if not mail_data:
             self.logger.error("No mail data provided")
             return None
@@ -225,14 +246,16 @@ class AutoLoginFlowUI:
 
                 if response.status_code != 200:
                     self.logger.warning(f"HTTP error: {response.status_code}. Retrying...")
-                    time.sleep(retry_interval)
+                    if not self._sleep(retry_interval):
+                        return None
                     continue
 
                 data = response.json()
 
                 if not data.get("status") or not data.get("messages"):
                     self.logger.warning("No messages found. Retrying...")
-                    time.sleep(retry_interval)
+                    if not self._sleep(retry_interval):
+                        return None
                     continue
 
                 self.logger.info(f"Found {len(data['messages'])} messages. Searching for Shopee link...")
@@ -247,11 +270,13 @@ class AutoLoginFlowUI:
                         return link_shopee
 
                 self.logger.warning("No Shopee link found. Retrying...")
-                time.sleep(retry_interval)
+                if not self._sleep(retry_interval):
+                    return None
 
             except Exception as e:
                 self.logger.warning(f"Error: {e}. Retrying...")
-                time.sleep(retry_interval)
+                if not self._sleep(retry_interval):
+                    return None
         
         return None
 
@@ -266,7 +291,20 @@ class AutoLoginFlowUI:
             self.logger.error("Failed to get device serial")
             return False
 
-        if not self.adb.wait_for_device(self.serial, timeout=180):
+        timeout = 180
+        start_time = time.time()
+        while self.running and time.time() - start_time < timeout:
+            if self.adb.get_device_state(self.serial) == "device":
+                self.logger.info(f"Device {self.serial} is ready")
+                break
+            if not self._sleep(1.5):
+                return False
+
+        if not self.running:
+            self.logger.warning("Stop requested while waiting for device")
+            return False
+
+        if time.time() - start_time >= timeout:
             self.logger.error("Device not ready")
             return False
 
@@ -281,6 +319,8 @@ class AutoLoginFlowUI:
         
         Command: am start -a android.intent.action.VIEW -d "LINK" -p com.shopee.vn
         """
+        if not self.running:
+            return False
         if not link:
             self.logger.error("No link provided")
             return False
@@ -310,107 +350,173 @@ class AutoLoginFlowUI:
     def run(self, shopee_link: str = None) -> bool:
         """Run auto login flow"""
         self.running = True
+        self.stop_requested = False
         
         if not self.connect_device():
+            self.running = False
             return False
 
         self.logger.info("Launching Shopee app...")
         if MODULES_AVAILABLE:
             self.adb.unlock_screen(self.serial)
-            time.sleep(0.2)
+        if not self._sleep(0.2):
+            self.running = False
+            return False
+        if MODULES_AVAILABLE:
             self.adb.launch_app(self.serial, self.config.APP_PACKAGE)
-        time.sleep(5.0)
+        if not self._sleep(5.0):
+            self.running = False
+            return False
 
-        self._tap_ratio(0.705, 0.911, wait=1.75)
-        self._tap_ratio(0.235, 0.280, wait=0.3)
+        if not self._tap_ratio(0.705, 0.911, wait=1.75):
+            self.running = False
+            return False
+        if not self._tap_ratio(0.235, 0.280, wait=0.3):
+            self.running = False
+            return False
         
         self.logger.info(f"Entering username: {self.username}")
+        if not self.running:
+            self.running = False
+            return False
         if MODULES_AVAILABLE:
             self.adb.input_text(self.serial, self.username)
-        time.sleep(0.3)
+        if not self._sleep(0.3):
+            self.running = False
+            return False
 
-        self._tap_ratio(0.237, 0.337, wait=0.3)
+        if not self._tap_ratio(0.237, 0.337, wait=0.3):
+            self.running = False
+            return False
         self.logger.info("Entering password...")
+        if not self.running:
+            self.running = False
+            return False
         if MODULES_AVAILABLE:
             self.adb.input_text(self.serial, self.password)
-        time.sleep(0.3)
+        if not self._sleep(0.3):
+            self.running = False
+            return False
 
-        self._tap_ratio(0.509, 0.410)
+        if not self._tap_ratio(0.509, 0.410):
+            self.running = False
+            return False
 
         self.logger.info("Waiting for email verification option...")
-        time.sleep(8.0)
-        self._tap_ratio(0.283, 0.228, wait=0.5)
+        if not self._sleep(8.0):
+            self.running = False
+            return False
+        if not self._tap_ratio(0.283, 0.228, wait=0.5):
+            self.running = False
+            return False
 
         self.logger.info("Handling permission prompt...")
-        time.sleep(4.0)
-        self._tap_ratio(0.48, 0.768, wait=2.0)
+        if not self._sleep(4.0):
+            self.running = False
+            return False
+        if not self._tap_ratio(0.48, 0.768, wait=2.0):
+            self.running = False
+            return False
 
-        self._tap_ratio(0.275, 0.535)
+        if not self._tap_ratio(0.275, 0.535):
+            self.running = False
+            return False
 
         self.logger.info("Waiting before fetching mail verification link...")
-        time.sleep(6.0)
-
-        # Nếu có link shopee được cung cấp (từ checkbox), sử dụng deep link
-        if shopee_link:
-            self.logger.success(f"Custom Shopee link provided!")
-            self.open_shopee_deeplink(shopee_link)
-            self.logger.info("Waiting for Shopee to load product...")
-            time.sleep(3.0)
-            self.logger.success("Done! Product should be open in Shopee app.")
+        if not self._sleep(6.0):
             self.running = False
-            return True
-        
-        # Nếu không có custom link, fetch từ mail (flow login cũ)
-        link_to_use = None
+            return False
+
+        # STEP 1: Fetch link xác minh từ mail (bắt buộc)
+        mail_link = None
         if self.hotmail:
-            link_to_use = self.fetch_shopee_link_from_mail(self.hotmail)
+            mail_link = self.fetch_shopee_link_from_mail(self.hotmail)
+        
+        if not self.running:
+            self.running = False
+            return False
             
-        if link_to_use:
-            self.logger.success(f"Using Shopee link: {link_to_use}")
-            self.logger.info("Opening Shopee link in browser on device...")
+        if mail_link:
+            self.logger.success(f"Using mail verification link: {mail_link}")
+            self.logger.info("Opening link in Chrome for verification...")
             
+            # STEP 2: Mở Chrome xác minh mail
             if MODULES_AVAILABLE:
                 self.adb.shell(self.serial, [
                     "am", "start", "-a", "android.intent.action.VIEW", 
-                    "-d", link_to_use
+                    "-d", mail_link
                 ])
             
+            # STEP 3: Xử lý Chrome First Run button
             self.logger.info("Waiting for Chrome First Run button...")
             chrome_fre_found = self._wait_and_tap_resource_id(
                 "com.android.chrome:id/fre_bottom_group",
                 timeout=30.0
             )
+            if not self.running:
+                self.running = False
+                return False
             if chrome_fre_found:
                 self.logger.info("Tapped Chrome First Run button")
             else:
                 self.logger.info("Tapping fallback coordinate")
-                self._tap_ratio(0.496, 0.885)
+                if not self._tap_ratio(0.496, 0.885):
+                    self.running = False
+                    return False
             
+            # STEP 4: Đợi dialog vị trí
             self.logger.info("Waiting for location permission dialog...")
             location_dialog_found = self._wait_for_text(
                 "shopee.vn muốn sử dụng thông tin vị trí thiết bị của bạn",
                 timeout=60.0
             )
+            if not self.running:
+                self.running = False
+                return False
             if location_dialog_found:
                 self.logger.info("Location dialog appeared")
-                time.sleep(2.5)
+                if not self._sleep(2.5):
+                    self.running = False
+                    return False
             
+            # STEP 5: Quay lại Shopee app
             self.logger.info("Returning to Shopee app...")
-            if MODULES_AVAILABLE:
+            if MODULES_AVAILABLE and self.running:
                 self.adb.launch_app(self.serial, self.config.APP_PACKAGE)
         else:
-            self.logger.warning("No Shopee link available")
+            self.logger.warning("No mail verification link available")
+        
+        # STEP 6: Đợi 5s
+        self.logger.info("Waiting 5s for Shopee to stabilize...")
+        if not self._sleep(5.0):
+            self.running = False
+            return False
+        
+        # STEP 7: Nếu có custom deep link, mở nó
+        if shopee_link:
+            self.logger.info("=" * 40)
+            self.logger.success(f"Opening custom deep link: {shopee_link}")
+            self.open_shopee_deeplink(shopee_link)
+            self.logger.info("Waiting for product to load...")
+            if not self._sleep(3.0):
+                self.running = False
+                return False
+            self.logger.success("Deep link opened successfully!")
             
-        if MODULES_AVAILABLE:
+        if MODULES_AVAILABLE and self.running:
             self.adb.press_keycode(self.serial, 4)
             
+        if not self.running:
+            self.running = False
+            return False
         self.logger.success("Auto login flow completed!")
         self.running = False
         return True
     
     def stop(self):
+        self.stop_requested = True
         self.running = False
-        self.logger.warning("Stopping flow...")
+        self.logger.warning("Stop requested. Finishing current step...")
 
 
 # ================== NiceGUI Interface ==================
@@ -422,204 +528,315 @@ is_running = False
 
 
 def create_ui():
-    """Tạo giao diện NiceGUI - Layout 2 cột"""
-    
-    # Custom CSS
+    """Build the NiceGUI layout."""
+
     ui.add_head_html('''
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --primary: #6366f1;
-            --primary-dark: #4f46e5;
-            --bg-dark: #0f172a;
-            --bg-card: #1e293b;
-            --bg-input: #334155;
-            --text-primary: #f1f5f9;
-            --text-secondary: #94a3b8;
-            --border: #475569;
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        html, body {
+            width: 100% !important;
+            height: 100vh !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
         }
         
         body {
-            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
-            height: 100vh;
-            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #e2e8f0;
         }
         
-        .main-wrapper {
+        /* Override NiceGUI default styles */
+        .nicegui-content {
+            width: 100% !important;
+            max-width: 100% !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        
+        .q-page {
+            padding: 0 !important;
+        }
+        
+        .q-layout, .q-page-container, .q-page {
+            width: 100% !important;
+            max-width: 100% !important;
+        }
+        
+        .app-container {
+            width: 100% !important;
             height: 100vh;
-            padding: 16px;
-            box-sizing: border-box;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            background: linear-gradient(90deg, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .status-badge {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-ready { background: rgba(34, 197, 94, 0.15); color: #4ade80; }
+        .status-running { background: rgba(59, 130, 246, 0.15); color: #60a5fa; animation: pulse 2s infinite; }
+        
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: row;
+            gap: 20px;
+            min-height: 0;
+            width: 100%;
+        }
+        
+        .left-panel {
+            width: 65%;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow-y: auto;
+        }
+        
+        .right-panel {
+            width: 35%;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
         }
         
         .card {
-            background: var(--bg-card);
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(148, 163, 184, 0.15);
             border-radius: 12px;
             padding: 16px;
-            border: 1px solid var(--border);
         }
         
-        .input-field textarea, .input-field input {
-            background: var(--bg-input) !important;
-            border: 1px solid var(--border) !important;
+        .card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin-bottom: 4px;
+        }
+        
+        .card-hint {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-bottom: 12px;
+        }
+        
+        .input-field textarea,
+        .input-field input {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.6) !important;
+            border: 1px solid rgba(148, 163, 184, 0.2) !important;
             border-radius: 8px !important;
-            color: var(--text-primary) !important;
+            color: #e2e8f0 !important;
             font-family: 'Consolas', monospace !important;
             font-size: 13px !important;
+            padding: 10px 12px !important;
         }
         
-        .input-field textarea:focus, .input-field input:focus {
-            border-color: var(--primary) !important;
+        .input-field textarea:focus,
+        .input-field input:focus {
+            border-color: #38bdf8 !important;
+            outline: none !important;
+        }
+        
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 4px;
+        }
+        
+        .btn {
+            flex: 1;
+            padding: 12px 20px !important;
+            border: none !important;
+            border-radius: 10px !important;
+            font-weight: 600 !important;
+            font-size: 14px !important;
+            cursor: pointer;
+            text-transform: none !important;
+        }
+        
+        .btn-start {
+            background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
+            color: white !important;
+        }
+        
+        .btn-stop {
+            background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+            color: white !important;
+        }
+        
+        .btn-clear {
+            background: transparent !important;
+            border: 1px solid rgba(148, 163, 184, 0.3) !important;
+            color: #94a3b8 !important;
+            padding: 6px 12px !important;
+            font-size: 12px !important;
+        }
+        
+        .log-card {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
         }
         
         .log-container {
-            background: #0d1117;
+            flex: 1;
+            background: #0f172a;
             border-radius: 8px;
             padding: 12px;
             font-family: 'Consolas', monospace;
             font-size: 12px;
-            height: calc(100vh - 140px);
             overflow-y: auto;
-            border: 1px solid #30363d;
+            min-height: 0;
         }
         
         .log-entry {
-            padding: 3px 0;
-            border-bottom: 1px solid #21262d;
-            line-height: 1.4;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
         }
         
-        .log-timestamp { color: #8b949e; margin-right: 6px; }
+        .log-time { color: #64748b; margin-right: 8px; }
         .log-level {
-            font-weight: 600;
-            margin-right: 6px;
-            padding: 1px 5px;
-            border-radius: 3px;
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
             font-size: 10px;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+        .log-INFO { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+        .log-SUCCESS { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+        .log-WARNING { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+        .log-ERROR { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        
+        .log-empty {
+            color: #64748b;
+            text-align: center;
+            padding: 40px;
         }
         
-        .btn-primary {
-            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%) !important;
-            border: none !important;
-            border-radius: 8px !important;
-            font-weight: 600 !important;
-            text-transform: none !important;
-            padding: 10px 20px !important;
-        }
+        .log-count { color: #64748b; font-size: 12px; }
         
-        .btn-danger { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important; }
-        .btn-small { padding: 6px 12px !important; font-size: 12px !important; }
-        
-        .title-gradient {
-            background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-weight: 700;
-        }
-        
-        .status-badge {
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        .status-ready { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
-        .status-running { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
-        .pulse { animation: pulse 2s infinite; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        /* NiceGUI overrides */
+        .q-field--outlined .q-field__control:before { border: none !important; }
+        .q-field--outlined .q-field__control:after { border: none !important; }
+        .q-checkbox__label { color: #e2e8f0 !important; font-weight: 500; }
     </style>
     ''')
-    
-    with ui.column().classes('main-wrapper w-full'):
+
+    with ui.element('div').classes('app-container'):
         # Header
-        with ui.row().classes('w-full justify-between items-center mb-3'):
-            ui.html('<h1 class="title-gradient text-2xl">🛒 Shopee Auto Login</h1>', sanitize=False)
+        with ui.element('div').classes('header'):
+            ui.html('<h1>🛒 Shopee Auto Login</h1>', sanitize=False)
             status_label = ui.html('<span class="status-badge status-ready">● Ready</span>', sanitize=False)
         
-        # Main Content - 2 columns
-        with ui.row().classes('w-full gap-4 flex-1'):
-            # Left Column - Controls
-            with ui.column().classes('flex-1 gap-3'):
-                # Credentials
-                with ui.card().classes('card w-full'):
-                    ui.label('📝 Credentials').classes('font-semibold text-slate-200 mb-2')
-                    ui.label('Format: user|pass|email|token|client_id|...').classes('text-xs text-slate-400 mb-2')
+        # Main content - 2 columns horizontal
+        with ui.element('div').classes('main-content'):
+            # Left panel - 65%
+            with ui.element('div').classes('left-panel'):
+                # Credentials card
+                with ui.element('div').classes('card'):
+                    ui.html('<div class="card-title">📝 Credentials</div>', sanitize=False)
+                    ui.html('<div class="card-hint">Format: user|pass|email|mail_pass|token|client_id|...</div>', sanitize=False)
                     credentials_input = ui.textarea(
-                        placeholder='user|pass|email|token|client_id|...'
-                    ).classes('input-field w-full').props('outlined rows=3 dense')
+                        placeholder='user|pass|email|mail_pass|token|client_id|...'
+                    ).classes('input-field').props('outlined rows=3')
                 
-                # Shopee Link Option
-                with ui.card().classes('card w-full'):
-                    with ui.row().classes('items-center gap-2'):
-                        use_custom_link = ui.checkbox('🔗 Link Shopee tùy chỉnh').classes('text-sm')
+                # Shopee link card  
+                with ui.element('div').classes('card'):
+                    use_custom_link = ui.checkbox('🔗 Use custom Shopee link (deep link)')
                     shopee_link_input = ui.input(
-                        placeholder='https://vn.shp.ee/dlink/...'
-                    ).classes('input-field w-full').props('outlined dense').bind_visibility_from(use_custom_link, 'value')
+                        placeholder='https://shopee.vn/product/...'
+                    ).classes('input-field').props('outlined').bind_visibility_from(use_custom_link, 'value')
                 
-                # Device Key
-                with ui.card().classes('card w-full'):
-                    ui.label('📱 Device Key').classes('font-semibold text-slate-200 mb-2')
-                    device_key_input = ui.input(
-                        value='e8da52170928cf3'
-                    ).classes('input-field w-full').props('outlined dense')
+                # Device key card
+                with ui.element('div').classes('card'):
+                    ui.html('<div class="card-title">📱 Device Key</div>', sanitize=False)
+                    device_key_input = ui.input(value='e8da52170928cf3').classes('input-field').props('outlined')
                 
-                # Action Buttons
-                with ui.row().classes('w-full gap-2'):
+                # Buttons
+                with ui.element('div').classes('btn-row'):
                     start_btn = ui.button('🚀 Start', on_click=lambda: start_flow(
                         credentials_input.value,
                         device_key_input.value,
                         shopee_link_input.value if use_custom_link.value else None,
-                        status_label,
-                        start_btn,
-                        stop_btn,
-                        log_container
-                    )).classes('btn-primary flex-1')
+                        status_label, start_btn, stop_btn, log_container
+                    )).classes('btn btn-start')
                     
                     stop_btn = ui.button('⏹ Stop', on_click=lambda: stop_flow(
                         status_label, start_btn, stop_btn
-                    )).classes('btn-primary btn-danger').props('disable')
+                    )).classes('btn btn-stop').props('disable')
             
-            # Right Column - Logs
-            with ui.column().classes('flex-1'):
-                with ui.card().classes('card w-full h-full'):
-                    with ui.row().classes('w-full justify-between items-center mb-2'):
-                        ui.label('📋 Log Output').classes('font-semibold text-slate-200')
-                        with ui.row().classes('gap-2 items-center'):
-                            log_count = ui.label('0').classes('text-xs text-slate-400')
-                            ui.button('🗑', on_click=lambda: clear_logs(log_container)).classes('btn-primary btn-small')
+            # Right panel - 35%
+            with ui.element('div').classes('right-panel'):
+                with ui.element('div').classes('card log-card'):
+                    with ui.element('div').classes('log-header'):
+                        ui.html('<div class="card-title">📋 Log Output</div>', sanitize=False)
+                        with ui.row().classes('items-center gap-2'):
+                            log_count = ui.label('0 entries').classes('log-count')
+                            ui.button('Clear', on_click=lambda: clear_logs(log_container)).classes('btn btn-clear')
                     
                     log_container = ui.html('', sanitize=False).classes('log-container')
                     ui.timer(0.5, lambda: update_logs(log_container, log_count))
 
 
+
 def update_logs(container, count_label):
-    """Cập nhật log display"""
+    "Update the log display."
     if not log_handler.logs:
-        container.content = '<div style="color: #8b949e; text-align: center; padding: 20px;">No logs yet...</div>'
+        container.content = '<div class="log-empty">No logs yet...</div>'
         count_label.set_text('0 entries')
         return
-    
+
     html_content = ""
-    for log in log_handler.logs[-100:]:  # Hiển thị 100 log gần nhất
-        level_colors = {
-            "INFO": "#3b82f6",
-            "WARNING": "#f59e0b", 
-            "ERROR": "#ef4444",
-            "SUCCESS": "#22c55e",
-            "DEBUG": "#a855f7"
-        }
-        bg_color = level_colors.get(log['level'], '#6b7280')
-        
+    for log in log_handler.logs[-100:]:
         html_content += f'''
         <div class="log-entry">
-            <span class="log-timestamp">[{log['timestamp']}]</span>
-            <span class="log-level" style="background: {bg_color}20; color: {bg_color};">{log['level']}</span>
+            <span class="log-time">[{log['timestamp']}]</span>
+            <span class="log-level log-{log['level']}">{log['level']}</span>
             <span style="color: {log['color']};">{log['message']}</span>
         </div>
         '''
-    
+
     container.content = html_content
     count_label.set_text(f'{len(log_handler.logs)} entries')
-    
-    # Auto scroll to bottom
+
     ui.run_javascript('''
         const logContainer = document.querySelector('.log-container');
         if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
@@ -627,82 +844,81 @@ def update_logs(container, count_label):
 
 
 def clear_logs(container):
-    """Xóa tất cả logs"""
+    "Clear the log output."
     log_handler.clear()
-    container.content = '<div style="color: #8b949e; text-align: center; padding: 20px;">Logs cleared</div>'
+    container.content = '<div class="log-empty">Logs cleared</div>'
 
 
-async def start_flow(credentials: str, device_key: str, shopee_link: str, 
+
+async def start_flow(credentials: str, device_key: str, shopee_link: str,
                      status_label, start_btn, stop_btn, log_container):
-    """Bắt đầu auto login flow"""
+    "Start the auto login flow."
     global current_flow, is_running
-    
+
     if not credentials.strip():
-        log_handler.error("Please enter credentials!")
+        log_handler.error("Please enter credentials.")
         return
-    
+
     if is_running:
-        log_handler.warning("Flow is already running!")
+        log_handler.warning("Flow is already running.")
         return
-    
+
     is_running = True
-    status_label.content = '<span class="status-badge status-running pulse">● Running...</span>'
+    status_label.content = '<span class="status-badge status-running pulse">Running</span>'
     start_btn.props('disable')
     stop_btn.props(remove='disable')
-    
+
     log_handler.clear()
     log_handler.info("=" * 50)
     log_handler.info("Starting Shopee Auto Login Flow")
     log_handler.info("=" * 50)
-    
+
     try:
         current_flow = AutoLoginFlowUI(device_key, credentials, log_handler)
-        
-        # Run in background thread
+
         def run_flow():
             global is_running
             try:
                 success = current_flow.run(shopee_link)
                 if success:
-                    log_handler.success("✅ Auto login completed successfully!")
+                    log_handler.success("Auto login completed successfully.")
+                elif current_flow and current_flow.stop_requested:
+                    log_handler.warning("Flow stopped.")
                 else:
-                    log_handler.error("❌ Auto login failed!")
+                    log_handler.error("Auto login failed.")
             except Exception as e:
                 log_handler.error(f"Error: {e}")
             finally:
                 is_running = False
-        
+
         thread = threading.Thread(target=run_flow, daemon=True)
         thread.start()
-        
-        # Wait for completion
+
         while is_running:
             await asyncio.sleep(0.5)
-            
+
     except Exception as e:
         log_handler.error(f"Error starting flow: {e}")
         is_running = False
-    
-    # Reset UI
-    status_label.content = '<span class="status-badge status-ready">● Ready</span>'
+
+    status_label.content = '<span class="status-badge status-ready">Ready</span>'
     start_btn.props(remove='disable')
     stop_btn.props('disable')
 
 
 def stop_flow(status_label, start_btn, stop_btn):
-    """Dừng flow"""
+    "Stop the current flow."
     global current_flow, is_running
-    
+
     if current_flow:
         current_flow.stop()
-    
+
     is_running = False
-    log_handler.warning("Flow stopped by user")
-    
-    status_label.content = '<span class="status-badge status-ready">● Ready</span>'
+    log_handler.warning("Flow stopped by user.")
+
+    status_label.content = '<span class="status-badge status-ready">Ready</span>'
     start_btn.props(remove='disable')
     stop_btn.props('disable')
-
 
 # Create UI
 create_ui()
@@ -713,5 +929,5 @@ ui.run(
     port=8888,
     reload=False,
     show=True,
-    dark=True
+    dark=False
 )
