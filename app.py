@@ -274,6 +274,39 @@ class AutoLoginFlowUI:
         self.logger.info(f"Screen size: {self.screen_width}x{self.screen_height}")
         return True
 
+    def open_shopee_deeplink(self, link: str) -> bool:
+        """
+        Mở link trực tiếp trong Shopee app bằng Deep Link.
+        Không cần qua trình duyệt!
+        
+        Command: am start -a android.intent.action.VIEW -d "LINK" -p com.shopee.vn
+        """
+        if not link:
+            self.logger.error("No link provided")
+            return False
+            
+        self.logger.info(f"Opening deep link in Shopee app...")
+        self.logger.info(f"Link: {link}")
+        
+        if MODULES_AVAILABLE:
+            try:
+                # Dùng deep link mở thẳng vào Shopee app
+                # -p com.shopee.vn: ép mở bằng Shopee, không hỏi
+                result = self.adb.shell(self.serial, [
+                    "am", "start",
+                    "-a", "android.intent.action.VIEW",
+                    "-d", link,
+                    "-p", "com.shopee.vn"  # Quan trọng: chỉ định package Shopee
+                ])
+                self.logger.success(f"Deep link sent to Shopee app!")
+                return True
+            except Exception as e:
+                self.logger.error(f"Failed to open deep link: {e}")
+                return False
+        else:
+            self.logger.info("[Demo] Would open deep link in Shopee")
+            return True
+
     def run(self, shopee_link: str = None) -> bool:
         """Run auto login flow"""
         self.running = True
@@ -317,11 +350,19 @@ class AutoLoginFlowUI:
         self.logger.info("Waiting before fetching mail verification link...")
         time.sleep(6.0)
 
-        # Nếu có link shopee được cung cấp, sử dụng nó
-        link_to_use = shopee_link
+        # Nếu có link shopee được cung cấp (từ checkbox), sử dụng deep link
+        if shopee_link:
+            self.logger.success(f"Custom Shopee link provided!")
+            self.open_shopee_deeplink(shopee_link)
+            self.logger.info("Waiting for Shopee to load product...")
+            time.sleep(3.0)
+            self.logger.success("Done! Product should be open in Shopee app.")
+            self.running = False
+            return True
         
-        # Nếu không có link và có hotmail data, fetch từ mail
-        if not link_to_use and self.hotmail:
+        # Nếu không có custom link, fetch từ mail (flow login cũ)
+        link_to_use = None
+        if self.hotmail:
             link_to_use = self.fetch_shopee_link_from_mail(self.hotmail)
             
         if link_to_use:
