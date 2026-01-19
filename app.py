@@ -447,11 +447,11 @@ class AutoLoginFlowUI:
                     "-d", mail_link
                 ])
             
-            # STEP 3: Xử lý Chrome First Run button
-            self.logger.info("Waiting for Chrome First Run button...")
+            # STEP 3: Xử lý Chrome First Run button (timeout 5.5s)
+            self.logger.info("Waiting for Chrome First Run button (5.5s)...")
             chrome_fre_found = self._wait_and_tap_resource_id(
                 "com.android.chrome:id/fre_bottom_group",
-                timeout=30.0
+                timeout=5.5
             )
             if not self.running:
                 self.running = False
@@ -459,10 +459,7 @@ class AutoLoginFlowUI:
             if chrome_fre_found:
                 self.logger.info("Tapped Chrome First Run button")
             else:
-                self.logger.info("Tapping fallback coordinate")
-                if not self._tap_ratio(0.496, 0.885):
-                    self.running = False
-                    return False
+                self.logger.info("Chrome First Run not found, skipping...")
             
             # STEP 4: Đợi dialog vị trí
             self.logger.info("Waiting for location permission dialog...")
@@ -486,11 +483,44 @@ class AutoLoginFlowUI:
         else:
             self.logger.warning("No mail verification link available")
         
-        # STEP 6: Đợi 5s
-        self.logger.info("Waiting 5s for Shopee to stabilize...")
-        if not self._sleep(5.0):
+        # STEP 6: Đợi cho đến khi xuất hiện "Xác thực Đăng nhập Nhanh"
+        self.logger.info("Waiting for 'Xác thực Đăng nhập Nhanh' dialog...")
+        quick_login_found = self._wait_for_text(
+            "Xác thực Đăng nhập Nhanh",
+            timeout=60.0,
+            interval=1.0
+        )
+        if not self.running:
             self.running = False
             return False
+        
+        # Nếu không thấy text đầu tiên, thử text thứ 2
+        if not quick_login_found:
+            self.logger.info("Trying alternative text...")
+            quick_login_found = self._wait_for_text(
+                "Bật đăng nhập nhanh để đăng nhập hiệu quả hơn",
+                timeout=10.0,
+                interval=1.0
+            )
+        
+        if quick_login_found:
+            self.logger.success("Quick login dialog appeared!")
+            # Tap tại tọa độ (0.239, 0.972)
+            self.logger.info("Tapping at (0.239, 0.972) to confirm...")
+            if not self._tap_ratio(0.239, 0.972):
+                self.running = False
+                return False
+            
+            # Chờ 4s
+            self.logger.info("Waiting 4s after confirmation...")
+            if not self._sleep(4.0):
+                self.running = False
+                return False
+        else:
+            self.logger.warning("Quick login dialog not found, continuing...")
+            if not self._sleep(2.0):
+                self.running = False
+                return False
         
         # STEP 7: Nếu có custom deep link, mở nó
         if shopee_link:
