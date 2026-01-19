@@ -402,10 +402,32 @@ class AutoLoginFlowUI:
             self.running = False
             return False
 
-        self.logger.info("Waiting for email verification option...")
-        if not self._sleep(8.0):
+        # Đợi cho đến khi xuất hiện màn hình xác minh email
+        self.logger.info("Waiting for email verification screen...")
+        email_verify_found = self._wait_for_text(
+            "Xác minh bằng liên kết Email",
+            timeout=60.0,
+            interval=1.0
+        )
+        if not self.running:
             self.running = False
             return False
+        
+        # Nếu không thấy text đầu, thử text thứ 2
+        if not email_verify_found:
+            self.logger.info("Trying alternative text...")
+            email_verify_found = self._wait_for_text(
+                "Để tăng cường bảo mật cho tài khoản của bạn",
+                timeout=10.0,
+                interval=1.0
+            )
+        
+        if email_verify_found:
+            self.logger.success("Email verification screen appeared!")
+        else:
+            self.logger.warning("Email verification screen not found, continuing anyway...")
+        
+        # Tap vào "Xác minh bằng liên kết Email"
         if not self._tap_ratio(0.283, 0.228, wait=0.5):
             self.running = False
             return False
@@ -702,6 +724,31 @@ def create_ui():
             margin-top: 4px;
         }
         
+        .link-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-top: 8px;
+        }
+        
+        .link-row .input-field {
+            flex: 1;
+        }
+        
+        .btn-open {
+            padding: 10px 16px !important;
+            background: linear-gradient(135deg, #10b981, #059669) !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            text-transform: none !important;
+            white-space: nowrap;
+        }
+            gap: 10px;
+            margin-top: 4px;
+        }
+        
         .btn {
             flex: 1;
             padding: 12px 20px !important;
@@ -811,9 +858,15 @@ def create_ui():
                 # Shopee link card  
                 with ui.element('div').classes('card'):
                     use_custom_link = ui.checkbox('🔗 Use custom Shopee link (deep link)')
-                    shopee_link_input = ui.input(
-                        placeholder='https://shopee.vn/product/...'
-                    ).classes('input-field').props('outlined').bind_visibility_from(use_custom_link, 'value')
+                    with ui.element('div').classes('link-row').bind_visibility_from(use_custom_link, 'value'):
+                        shopee_link_input = ui.input(
+                            placeholder='https://shopee.vn/...'
+                        ).classes('input-field').props('outlined')
+                        ui.button('🚀 Open', on_click=lambda: open_deeplink_only(
+                            shopee_link_input.value,
+                            device_key_input.value,
+                            log_container
+                        )).classes('btn-open')
                 
                 # Device key card
                 with ui.element('div').classes('card'):
@@ -878,6 +931,41 @@ def clear_logs(container):
     log_handler.clear()
     container.content = '<div class="log-empty">Logs cleared</div>'
 
+
+def open_deeplink_only(shopee_link: str, device_key: str, log_container):
+    "Open deep link directly without full flow."
+    if not shopee_link or not shopee_link.strip():
+        log_handler.error("Please enter a Shopee link!")
+        return
+    
+    log_handler.info("=" * 40)
+    log_handler.info("Opening deep link directly...")
+    log_handler.info(f"Link: {shopee_link}")
+    
+    try:
+        if MODULES_AVAILABLE:
+            config = Config()
+            adb = ADBController()
+            device_manager = DeviceStateManager(config.PCHANGER_BASE_URL, device_key)
+            
+            serial = device_manager.get_device_serial()
+            if not serial:
+                log_handler.error("Failed to get device serial")
+                return
+            
+            # Mở deep link trực tiếp vào Shopee
+            adb.shell(serial, [
+                "am", "start",
+                "-a", "android.intent.action.VIEW",
+                "-d", shopee_link,
+                "-p", "com.shopee.vn"
+            ])
+            log_handler.success("Deep link sent to Shopee app!")
+        else:
+            log_handler.warning("Modules not available - demo mode")
+            log_handler.success("[Demo] Deep link would be opened")
+    except Exception as e:
+        log_handler.error(f"Error opening deep link: {e}")
 
 
 async def start_flow(credentials: str, device_key: str, shopee_link: str,
