@@ -301,7 +301,18 @@ class PchangerAPI:
 # MAIL API (Get TikTok OTP)
 # ============================================================================
 
-def get_tiktok_otp(email: str, refresh_token: str, client_id: str) -> Optional[str]:
+def _parse_mail_date(value: str) -> Optional[datetime]:
+    """Parse API date format: 'HH:MM - DD/MM/YYYY'."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value.strip(), "%H:%M - %d/%m/%Y")
+    except Exception:
+        return None
+
+
+def get_tiktok_otp(email: str, refresh_token: str, client_id: str,
+                   min_time: Optional[datetime] = None) -> Optional[str]:
     """
     Lấy mã OTP TikTok từ mail
     
@@ -331,6 +342,16 @@ def get_tiktok_otp(email: str, refresh_token: str, client_id: str) -> Optional[s
         
         if result.get("status") == True and result.get("code"):
             code = result.get("code")
+            mail_date = _parse_mail_date(result.get("date", ""))
+            if min_time:
+                if not mail_date:
+                    log.warning("OTP date missing/unparseable, skipping")
+                    return None
+                # API chỉ có phút, nên so sánh theo phút
+                min_time_floor = min_time.replace(second=0, microsecond=0)
+                if mail_date < min_time_floor:
+                    log.info(f"OTP is older than send time ({mail_date} < {min_time}), skipping")
+                    return None
             log.success(f"Got OTP: {code}")
             return code
         
@@ -425,30 +446,35 @@ class TikTokAutomation:
         Thực hiện vuốt ngẫu nhiên
         
         Args:
-            count: Số lần vuốt (None = random 1-3)
+            count: Số lần vuốt (None = random 3-5)
         """
         if count is None:
-            count = random.randint(1, 3)
+            count = random.randint(3, 5)
         
         log.info(f"Performing {count} random swipe(s)...")
         
         for i in range(count):
-            # Random vị trí start/end
-            start_x = random.randint(int(self.screen_width * 0.3), int(self.screen_width * 0.7))
-            start_y = random.randint(int(self.screen_height * 0.6), int(self.screen_height * 0.8))
-            end_x = random.randint(int(self.screen_width * 0.3), int(self.screen_width * 0.7))
-            end_y = random.randint(int(self.screen_height * 0.2), int(self.screen_height * 0.4))
+            # Random vị trí start/end (tránh sát trên/dưới)
+            start_x = random.randint(int(self.screen_width * 0.2), int(self.screen_width * 0.8))
+            start_y = random.randint(int(self.screen_height * 0.55), int(self.screen_height * 0.8))
+            end_x = random.randint(int(self.screen_width * 0.2), int(self.screen_width * 0.8))
+            end_y = random.randint(int(self.screen_height * 0.2), int(self.screen_height * 0.5))
             
-            # Random duration
-            duration = random.uniform(0.2, 0.5)
+            # Random duration (tránh hold lâu)
+            duration = random.uniform(0.15, 0.35)
             
             self.device.swipe(start_x, start_y, end_x, end_y, duration=duration)
             log.info(f"Swipe {i+1}: ({start_x},{start_y}) -> ({end_x},{end_y})")
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(3)
     
     def input_text(self, text: str):
         """Nhập text"""
-        self.device.send_keys(text, clear=True)
+        # Clear existing text: move cursor to end and long-press delete
+        self._adb_shell(["input", "keyevent", "123"])  # KEYCODE_MOVE_END
+        self._adb_shell(["input", "keyevent", "--longpress", "67"])  # KEYCODE_DEL
+
+        escaped_text = str(text).replace(" ", "%s")
+        self._adb_shell(["input", "text", escaped_text])
         log.info(f"Inputted text: {text}")
     
     def wait_for_element(self, xpath: str = None, text: str = None, 
@@ -619,6 +645,7 @@ class TikTokAutomation:
         # Click Random 1 trong các tọa độ
         coords_1 = [(0.775, 0.901), (0.646, 0.895), (0.254, 0.905), (0.452, 0.893)]
         self.tap_random(coords_1)
+        time.sleep(2)
         
         time.sleep(2)
         
@@ -738,8 +765,10 @@ class TikTokAutomation:
         # Click nút Đăng nhập
         coords_8 = [(0.461, 0.558), (0.702, 0.564)]
         self.tap_random(coords_8)
+        time.sleep(5)
         
         log.success("Phase 3 completed")
+        time.sleep(6)
         return True
     
     # ========================================================================
@@ -788,8 +817,9 @@ class TikTokAutomation:
         log.info("Clicking 'Send Code' button...")
         self.tap_ratio(0.521, 0.853)
         
-        # Bắt đầu timer
+        # Bắt đầu timer (chỉ lấy OTP từ thời điểm này trở đi)
         send_code_time = time.time()
+        send_code_dt = datetime.now().replace(second=0, microsecond=0)
         attempt = 0
         
         while attempt < Config.MAX_OTP_ATTEMPTS:
@@ -801,11 +831,9 @@ class TikTokAutomation:
             poll_start = time.time()
             
             while time.time() - poll_start < 30:  # Poll 30s mỗi attempt
-                otp = get_tiktok_otp(email, refresh_token, client_id)
+                otp = get_tiktok_otp(email, refresh_token, client_id, min_time=send_code_dt)
                 
                 if otp:
-                    log.success(f"Got OTP: {otp}")
-                    
                     # Nhập OTP
                     self.input_text(otp)
                     time.sleep(2)
@@ -815,7 +843,9 @@ class TikTokAutomation:
                         log.success("Login successful!")
                         return True
                     
-                    break
+                    # Có OTP rồi thì dừng, không lặp tiếp
+                    log.warning("OTP entered but login not confirmed, stopping retries")
+                    return False
                 
                 time.sleep(Config.OTP_POLL_INTERVAL)
             
@@ -825,6 +855,7 @@ class TikTokAutomation:
                 log.warning(f"No OTP after {int(elapsed)}s, clicking resend...")
                 self.tap_ratio(0.181, 0.338)  # Nút gửi lại mã
                 send_code_time = time.time()  # Reset timer
+                send_code_dt = datetime.now().replace(second=0, microsecond=0)
                 time.sleep(2)
         
         log.error("OTP verification failed after max attempts")
