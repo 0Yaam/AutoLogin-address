@@ -262,11 +262,19 @@ class AutoLoginFlowUI:
 
                 for msg in data['messages']:
                     html_content = msg.get('message', '')
+                    
+                    # Tìm link dạng 1: https://vn.shp.ee/dlink/...
                     match = re.search(r'https://vn\.shp\.ee/dlink/[a-zA-Z0-9]+', html_content)
-
                     if match:
                         link_shopee = match.group(0)
-                        self.logger.success(f"Found Shopee link: {link_shopee}")
+                        self.logger.success(f"Found Shopee link (shp.ee): {link_shopee}")
+                        return link_shopee
+                    
+                    # Tìm link dạng 2: https://u*.ct.sendgrid.net/ls/click?upn=...
+                    match = re.search(r'https://u\d+\.ct\.sendgrid\.net/ls/click\?upn=[^\s"<>]+', html_content)
+                    if match:
+                        link_shopee = match.group(0)
+                        self.logger.success(f"Found Shopee link (sendgrid): {link_shopee}")
                         return link_shopee
 
                 self.logger.warning("No Shopee link found. Retrying...")
@@ -469,11 +477,11 @@ class AutoLoginFlowUI:
                     "-d", mail_link
                 ])
             
-            # STEP 3: Xử lý Chrome First Run button (timeout 5.5s)
-            self.logger.info("Waiting for Chrome First Run button (5.5s)...")
+            # STEP 3: Xử lý Chrome First Run button (timeout 3s)
+            self.logger.info("Waiting for Chrome First Run button (3s)...")
             chrome_fre_found = self._wait_and_tap_resource_id(
                 "com.android.chrome:id/fre_bottom_group",
-                timeout=5.5
+                timeout=3.0
             )
             if not self.running:
                 self.running = False
@@ -483,33 +491,57 @@ class AutoLoginFlowUI:
             else:
                 self.logger.info("Chrome First Run not found, skipping...")
             
-            # STEP 4: Đợi dialog vị trí
-            self.logger.info("Waiting for location permission dialog...")
+            # STEP 4: Đợi dialog vị trí (timeout 6s)
+            self.logger.info("Waiting for location permission dialog (6s)...")
             location_dialog_found = self._wait_for_text(
                 "shopee.vn muốn sử dụng thông tin vị trí thiết bị của bạn",
-                timeout=60.0
+                timeout=6.0
             )
             if not self.running:
                 self.running = False
                 return False
             if location_dialog_found:
-                self.logger.info("Location dialog appeared")
-                if not self._sleep(2.5):
+                self.logger.info("Location dialog appeared, tapping...")
+                # Tap tọa độ (0.599, 0.558)
+                if not self._tap_ratio(0.599, 0.558):
                     self.running = False
                     return False
+                # Delay 1s rồi tap (0.689, 0.907)
+                if not self._sleep(1.0):
+                    self.running = False
+                    return False
+                if not self._tap_ratio(0.689, 0.907):
+                    self.running = False
+                    return False
+            else:
+                self.logger.info("Location dialog not found, skipping...")
             
-            # STEP 5: Quay lại Shopee app
+            # STEP 5: Đợi trang Shopee load xong (timeout 8s)
+            self.logger.info("Waiting for Shopee page to load (8s)...")
+            shopee_page_loaded = self._wait_for_text(
+                "Shopee Việt Nam | Mua và Bán Trên Ứng Dụng Di Động Hoặc Website",
+                timeout=8.0
+            )
+            if not self.running:
+                self.running = False
+                return False
+            if shopee_page_loaded:
+                self.logger.success("Shopee page loaded successfully!")
+            else:
+                self.logger.warning("Shopee page not detected, continuing anyway...")
+            
+            # STEP 6: Quay lại Shopee app
             self.logger.info("Returning to Shopee app...")
             if MODULES_AVAILABLE and self.running:
                 self.adb.launch_app(self.serial, self.config.APP_PACKAGE)
         else:
             self.logger.warning("No mail verification link available")
         
-        # STEP 6: Đợi cho đến khi xuất hiện "Xác thực Đăng nhập Nhanh"
-        self.logger.info("Waiting for 'Xác thực Đăng nhập Nhanh' dialog...")
+        # STEP 7: Đợi cho đến khi xuất hiện "Xác thực Đăng nhập Nhanh" (timeout 7s)
+        self.logger.info("Waiting for 'Xác thực Đăng nhập Nhanh' dialog (7s)...")
         quick_login_found = self._wait_for_text(
             "Xác thực Đăng nhập Nhanh",
-            timeout=60.0,
+            timeout=7.0,
             interval=1.0
         )
         if not self.running:
@@ -544,7 +576,7 @@ class AutoLoginFlowUI:
                 self.running = False
                 return False
         
-        # STEP 7: Nếu có custom deep link, mở nó
+        # STEP 8: Nếu có custom deep link, mở nó
         if shopee_link:
             self.logger.info("=" * 40)
             self.logger.success(f"Opening custom deep link: {shopee_link}")
@@ -554,9 +586,10 @@ class AutoLoginFlowUI:
                 self.running = False
                 return False
             self.logger.success("Deep link opened successfully!")
-            
-        if MODULES_AVAILABLE and self.running:
-            self.adb.press_keycode(self.serial, 4)
+        else:
+            # Chỉ nhấn back khi không mở deep link
+            if MODULES_AVAILABLE and self.running:
+                self.adb.press_keycode(self.serial, 4)
             
         if not self.running:
             self.running = False
