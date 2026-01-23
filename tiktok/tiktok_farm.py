@@ -36,6 +36,7 @@ class Config:
     # Google Sheets
     CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), "credentials.json")
     SHEET_NAME = "TikTok Farm"  # Tên sheet Google
+    SHEET_URL = "https://docs.google.com/spreadsheets/d/195HgTVjWlIrR41VBoHf90thTf1YSph6YCiCcYqxkdcg/edit?gid=0#gid=0"
     
     # Timeouts
     OTP_TIMEOUT = 68  # Giây trước khi gửi lại mã
@@ -765,6 +766,19 @@ class TikTokAutomation:
         # Click nút Đăng nhập
         coords_8 = [(0.461, 0.558), (0.702, 0.564)]
         self.tap_random(coords_8)
+        # Nếu xuất hiện permission hỏi danh bạ thì xử lý nhanh
+        permission_found = self.wait_for_element(
+            resource_id="com.android.permissioncontroller:id/permission_message",
+            timeout=2.0
+        )
+        if not permission_found:
+            permission_found = self.wait_for_element(
+                resource_id="com.android.permissioncontroller:id/permission_deny_button",
+                timeout=2.0
+            )
+        if permission_found:
+            log.info("Permission prompt detected, tapping deny coordinate")
+            self.tap_ratio(0.512, 0.6, delay=1)
         time.sleep(5)
         
         log.success("Phase 3 completed")
@@ -836,16 +850,17 @@ class TikTokAutomation:
                 if otp:
                     # Nhập OTP
                     self.input_text(otp)
-                    time.sleep(2)
+                    # Pause sau khi nhập OTP
+                    time.sleep(5)
                     
                     # Kiểm tra đăng nhập thành công
                     if self.check_login_success():
                         log.success("Login successful!")
                         return True
                     
-                    # Có OTP rồi thì dừng, không lặp tiếp
-                    log.warning("OTP entered but login not confirmed, stopping retries")
-                    return False
+                    # Có OTP rồi thì pause và dừng, không lặp tiếp
+                    log.warning("OTP entered, pausing without further retries")
+                    return True
                 
                 time.sleep(Config.OTP_POLL_INTERVAL)
             
@@ -963,9 +978,9 @@ def main():
             print("Error: Device key cannot be empty")
             return
         
-        sheet_url = input("Enter Google Sheet URL: ").strip()
+        sheet_url = Config.SHEET_URL
         if not sheet_url:
-            print("Error: Google Sheet URL cannot be empty")
+            print("Error: Google Sheet name cannot be empty")
             return
         
         default_template = f"{datetime.now().strftime('%d-%m-%Y')}---"
@@ -1073,19 +1088,9 @@ def main():
             )
             
             if success:
-                # Tạo tên backup: prefix + số thứ tự (3 chữ số)
-                backup_name = f"{file_prefix}{current_num:03d}"
-                
-                backup_result = pchanger.backup_device(device_key, backup_name)
-                
-                if backup_result:
-                    sheets.update_status(row_num, "SUCCESS")
-                    sheets.update_backup_time(row_num, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                    sheets.update_backup_name(row_num, backup_result)
-                    log.success(f"Backup completed: {backup_result}")
-                else:
-                    sheets.update_status(row_num, "SUCCESS (no backup)")
-                
+                # Tạm thời bỏ backup cho nhanh
+                sheets.update_status(row_num, "SUCCESS (no backup)")
+                log.info("Skipping backup (paused)")
                 current_num += 1
             else:
                 sheets.update_status(row_num, "FAILED")
