@@ -12,7 +12,7 @@ import sys
 import time
 import random
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Tuple, List, Dict, Any
 
 import uiautomator2 as u2
@@ -313,8 +313,7 @@ def _parse_mail_date(value: str) -> Optional[datetime]:
 
 
 def get_tiktok_otp(email: str, refresh_token: str, client_id: str,
-                   min_time: Optional[datetime] = None,
-                   tolerance_minutes: int = 1) -> Optional[str]:
+                   min_time: Optional[datetime] = None) -> Optional[str]:
     """
     Lấy mã OTP TikTok từ mail
     
@@ -340,11 +339,7 @@ def get_tiktok_otp(email: str, refresh_token: str, client_id: str,
             timeout=15
         )
         
-        try:
-            result = response.json()
-        except Exception as e:
-            log.error(f"Mail API error: {e}")
-            return None
+        result = response.json()
         
         if result.get("status") == True and result.get("code"):
             code = result.get("code")
@@ -353,13 +348,10 @@ def get_tiktok_otp(email: str, refresh_token: str, client_id: str,
                 if not mail_date:
                     log.warning("OTP date missing/unparseable, skipping")
                     return None
-                # API chỉ có phút, nên so sánh theo phút (cho phép lệch 1p)
+                # API chỉ có phút, nên so sánh theo phút
                 min_time_floor = min_time.replace(second=0, microsecond=0)
-                min_allowed = min_time_floor - timedelta(minutes=tolerance_minutes)
-                if mail_date < min_allowed:
-                    log.info(
-                        f"OTP is older than send time ({mail_date} < {min_allowed}), skipping"
-                    )
+                if mail_date < min_time_floor:
+                    log.info(f"OTP is older than send time ({mail_date} < {min_time}), skipping")
                     return None
             log.success(f"Got OTP: {code}")
             return code
@@ -463,14 +455,14 @@ class TikTokAutomation:
         log.info(f"Performing {count} random swipe(s)...")
         
         for i in range(count):
-            # Random vị trí start/end (tránh sát trên/dưới) - vuốt mạnh hơn
+            # Random vị trí start/end (tránh sát trên/dưới)
             start_x = random.randint(int(self.screen_width * 0.2), int(self.screen_width * 0.8))
-            start_y = random.randint(int(self.screen_height * 0.65), int(self.screen_height * 0.85))
+            start_y = random.randint(int(self.screen_height * 0.55), int(self.screen_height * 0.8))
             end_x = random.randint(int(self.screen_width * 0.2), int(self.screen_width * 0.8))
-            end_y = random.randint(int(self.screen_height * 0.15), int(self.screen_height * 0.35))
+            end_y = random.randint(int(self.screen_height * 0.2), int(self.screen_height * 0.5))
             
-            # Random duration (nhanh hơn ~50%)
-            duration = random.uniform(0.08, 0.18)
+            # Random duration (tránh hold lâu)
+            duration = random.uniform(0.15, 0.35)
             
             self.device.swipe(start_x, start_y, end_x, end_y, duration=duration)
             log.info(f"Swipe {i+1}: ({start_x},{start_y}) -> ({end_x},{end_y})")
@@ -527,75 +519,62 @@ class TikTokAutomation:
         except Exception:
             return False
     
-    def launch_tiktok(self, clear_data: bool = True, open_settings: bool = True):
+    def launch_tiktok(self):
         """Mở app TikTok"""
-        if clear_data:
-            log.info("Clearing TikTok app data...")
-            self._adb_shell(["pm", "clear", Config.TIKTOK_PACKAGE])
-            time.sleep(1)
-        if open_settings:
-            log.info("Opening Date settings...")
-            self._adb_shell(["am", "start", "-a", "android.settings.DATE_SETTINGS"])
-            time.sleep(1)
-            self.tap_ratio(0.875, 0.286, delay=0.3)
-            self.tap_ratio(0.34, 0.376, delay=0.3)
-            self.tap_ratio(0.245, 0.341, delay=0.3)
+        log.info("Opening Date settings...")
+        self._adb_shell(["am", "start", "-a", "android.settings.DATE_SETTINGS"])
+        time.sleep(1)
+        self.tap_ratio(0.875, 0.286, delay=0.3)
+        self.tap_ratio(0.34, 0.376, delay=0.3)
+        self.tap_ratio(0.245, 0.341, delay=0.3)
 
-            date_choice = random.choice([
-                (0.241, 0.449),
-                (0.34, 0.453),
-                "text:3",
-                (0.594, 0.445),
-                (0.681, 0.449),
-                (0.25, 0.5),
-                (0.25, 0.558),
-                (0.25, 0.596),
-                (0.336, 0.497),
-                (0.435, 0.558),
-                (0.517, 0.592),
-                (0.512, 0.537),
-                (0.612, 0.541),
-                (0.681, 0.55),
-                (0.599, 0.587),
-                (0.775, 0.592),
-            ])
-            if date_choice == "text:3" and self.device(text="3").exists:
-                log.info("Tapping text '3' in Date settings")
-                self.device(text="3").click()
-                time.sleep(0.3)
-            else:
-                if date_choice == "text:3":
-                    date_choice = random.choice([
-                        (0.241, 0.449),
-                        (0.34, 0.453),
-                        (0.594, 0.445),
-                        (0.681, 0.449),
-                        (0.25, 0.5),
-                        (0.25, 0.558),
-                        (0.25, 0.596),
-                        (0.336, 0.497),
-                        (0.435, 0.558),
-                        (0.517, 0.592),
-                        (0.512, 0.537),
-                        (0.612, 0.541),
-                        (0.681, 0.55),
-                        (0.599, 0.587),
-                        (0.775, 0.592),
-                    ])
-                self.tap_ratio(date_choice[0], date_choice[1], delay=0.3)
+        date_choice = random.choice([
+            (0.241, 0.449),
+            (0.34, 0.453),
+            "text:3",
+            (0.594, 0.445),
+            (0.681, 0.449),
+            (0.25, 0.5),
+            (0.25, 0.558),
+            (0.25, 0.596),
+            (0.336, 0.497),
+            (0.435, 0.558),
+            (0.517, 0.592),
+            (0.512, 0.537),
+            (0.612, 0.541),
+            (0.681, 0.55),
+            (0.599, 0.587),
+            (0.775, 0.592),
+        ])
+        if date_choice == "text:3" and self.device(text="3").exists:
+            log.info("Tapping text '3' in Date settings")
+            self.device(text="3").click()
+            time.sleep(0.3)
+        else:
+            if date_choice == "text:3":
+                date_choice = random.choice([
+                    (0.241, 0.449),
+                    (0.34, 0.453),
+                    (0.594, 0.445),
+                    (0.681, 0.449),
+                    (0.25, 0.5),
+                    (0.25, 0.558),
+                    (0.25, 0.596),
+                    (0.336, 0.497),
+                    (0.435, 0.558),
+                    (0.517, 0.592),
+                    (0.512, 0.537),
+                    (0.612, 0.541),
+                    (0.681, 0.55),
+                    (0.599, 0.587),
+                    (0.775, 0.592),
+                ])
+            self.tap_ratio(date_choice[0], date_choice[1], delay=0.3)
 
-            self.tap_ratio(0.758, 0.74, delay=0.6)
+        self.tap_ratio(0.758, 0.74, delay=0.6)
         log.info("Launching TikTok...")
         self.device.app_start(Config.TIKTOK_PACKAGE)
         time.sleep(3)
-
-    def close_tiktok(self):
-        """Đóng app TikTok"""
-        log.info("Closing TikTok...")
-        try:
-            self.device.app_stop(Config.TIKTOK_PACKAGE)
-        except Exception:
-            self._adb_shell(["am", "force-stop", Config.TIKTOK_PACKAGE])
     
     def unlock_screen(self):
         """
@@ -674,18 +653,12 @@ class TikTokAutomation:
         # Click tiếp 1 trong các tọa độ
         coords_2 = [(0.232, 0.899), (0.155, 0.91)]
         self.tap_random(coords_2)
-
-        # Sau bước này: sleep 2s, wipe 3 cái, tap tọa độ, chờ 4s, close app, launch lại (không clear)
+        
         time.sleep(2)
-        self.random_swipe(count=3)
-        self.tap_ratio(0.098, 0.908)
-        time.sleep(4)
-        self.close_tiktok()
-        time.sleep(3)
-        self.launch_tiktok(clear_data=False, open_settings=False)
-
-        # Thực hiện swipe ngẫu nhiên các bước tiếp theo
+        
+        # Thực hiện swipe ngẫu nhiên 1-3 lần
         self.random_swipe()
+        
         time.sleep(2)
         
         log.success("Phase 1 completed")
@@ -717,7 +690,7 @@ class TikTokAutomation:
         time.sleep(1)
         
         # Click tọa độ cố định
-        self.tap_ratio(0.66, 0.313)
+        self.tap_ratio(0.474, 0.341)
         time.sleep(2)
         
         # Click Random
@@ -803,13 +776,6 @@ class TikTokAutomation:
                 resource_id="com.android.permissioncontroller:id/permission_deny_button",
                 timeout=2.0
             )
-        if not permission_found:
-            permission_found = self.wait_for_element(
-                resource_id="com.android.permissioncontroller:id/grant_dialog",
-                timeout=2.0
-            )
-        if not permission_found and self.check_activity("GrantPermissionsActivity"):
-            permission_found = True
         if permission_found:
             log.info("Permission prompt detected, tapping deny coordinate")
             self.tap_ratio(0.512, 0.6, delay=1)
