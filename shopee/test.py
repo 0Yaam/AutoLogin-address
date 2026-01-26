@@ -69,6 +69,7 @@ class Config:
     RESOURCE_ID_DIALOG_TITLE: str = "com.shopee.vn:id/txt_title"
     RESOURCE_ID_DIALOG_POSITIVE: str = "com.shopee.vn:id/buttonDefaultPositive"
     RESOURCE_ID_PHONE_INPUT: str = "com.shopee.vn:id/cret_edit_text" 
+    RESOURCE_ID_ACTIVATE_WALLET: str = "com.shopee.vn:id/tvActivateWallet"
     
     # Nút Đăng nhập/Tiếp tục (nút màu cam sau khi điền sdt)
     RESOURCE_ID_LOGIN_BTN: str = "com.shopee.vn:id/btnLogin"
@@ -1925,22 +1926,22 @@ class ShopeeAutomation:
             self.logger.info("="*60)
             self.launch_app_and_handle_popups()
             
-            # Step 2: Lướt (2-4 lần)
+            # Step 2: Lướt (2 lần)
             self.logger.info("="*60)
             self.logger.info("Step 2: Scrolling...")
             self.logger.info("="*60)
-            num_swipes = random.randint(3, 5)
+            num_swipes = 2
             self.logger.info(f"Swiping {num_swipes} times...")
             for i in range(num_swipes):
                 self.logger.info(f"Swipe {i+1}/{num_swipes}...")
                 self._random_swipe_up()
                 time.sleep(random.uniform(0.3, 0.5))
             
-            # Step 3: Nhấn sản phẩm (random lướt 1-2 lần trong đó), back
+            # Step 3: Nhấn sản phẩm (lướt 2 lần trong đó), back
             self.logger.info("="*60)
             self.logger.info("Step 3: Click product, scroll inside, back...")
             self.logger.info("="*60)
-            self._click_product_scroll_and_back(swipes_inside=random.randint(2, 4))
+            self._click_product_scroll_and_back(swipes_inside=2)
             
             # Step 4: Nhấn tọa độ (0.097, 0.91)
             self.logger.info("="*60)
@@ -1987,22 +1988,22 @@ class ShopeeAutomation:
                 quick_mode=True
             )
             
-            # Step 9: Lướt
+            # Step 9: Lướt (2-3 lần)
             self.logger.info("="*60)
             self.logger.info("Step 9: Scrolling after relaunch...")
             self.logger.info("="*60)
-            num_swipes = random.randint(3, 5)
+            num_swipes = random.randint(2, 3)
             self.logger.info(f"Swiping {num_swipes} times...")
             for i in range(num_swipes):
                 self.logger.info(f"Swipe {i+1}/{num_swipes}...")
                 self._random_swipe_up()
                 time.sleep(random.uniform(0.3, 0.5))
             
-            # Step 10: Nhấn sản phẩm (lướt 1 lần), back
+            # Step 10: Nhấn sản phẩm (lướt 1-2 lần), back
             self.logger.info("="*60)
-            self.logger.info("Step 10: Click product, scroll once, back...")
+            self.logger.info("Step 10: Click product, scroll 1-2 times, back...")
             self.logger.info("="*60)
-            self._click_product_scroll_and_back(swipes_inside=random.randint(2, 4))
+            self._click_product_scroll_and_back(swipes_inside=random.randint(1, 2))
             
             # Step 11: Ready for registration (Notification tab)
             self.logger.info("="*60)
@@ -2026,12 +2027,42 @@ class ShopeeAutomation:
                 self._random_swipe_up()
                 time.sleep(random.uniform(0.3, 0.5))
 
+            tap_x = int(self.screen_width * 0.226)
+            tap_y = int(self.screen_height * 0.97)
+            self.logger.info(f"Tapping at ({tap_x}, {tap_y}) (back)...")
+            self.adb.tap(self.serial, tap_x, tap_y)
+            time.sleep(0.3)
+
             tap_x = int(self.screen_width * 0.288)
             tap_y = int(self.screen_height * 0.909)
             self.logger.info(f"Tapping at ({tap_x}, {tap_y})...")
             self.adb.tap(self.serial, tap_x, tap_y)
-            self.logger.info("Waiting 6s...")
-            time.sleep(random.uniform(6.0, 8.0))
+            self.logger.info("Waiting 10s...")
+            time.sleep(10.0)
+
+            tap_x = int(self.screen_width * 0.7)
+            tap_y = int(self.screen_height * 0.91)
+            max_taps = 4
+            prompt_handled = False
+            for i in range(3):
+                self.logger.info(f"Tapping at ({tap_x}, {tap_y})...")
+                self.adb.tap(self.serial, tap_x, tap_y)
+                time.sleep(2.0)
+
+            # Start checking after the 3rd tap
+            prompt_handled = self._tap_signup_prompt_if_present()
+
+            # If not visible yet, tap more (max 4 total)
+            extra_taps = max_taps - 3
+            while not prompt_handled and extra_taps > 0:
+                self.logger.info(f"Tapping at ({tap_x}, {tap_y})...")
+                self.adb.tap(self.serial, tap_x, tap_y)
+                time.sleep(2.0)
+                prompt_handled = self._tap_signup_prompt_if_present()
+                extra_taps -= 1
+
+            self.logger.info("Waiting 3s...")
+            time.sleep(3.0)
             self.logger.info("close app...")
             self.adb.shell(self.serial, ["am", "force-stop", self.config.APP_PACKAGE])
             self.logger.info("✓ Workflow completed successfully")
@@ -2210,6 +2241,29 @@ class ShopeeAutomation:
         self.logger.info("Pressing Back...")
         self.adb.press_keycode(self.serial, 4)  # BACK
         time.sleep(random.uniform(1.0, 1.5))
+
+    def _tap_signup_prompt_if_present(self) -> bool:
+        """
+        Detect signup prompts and tap specific coordinates if found.
+
+        Returns:
+            True if a prompt was detected and tapped, False otherwise
+        """
+        xml_content = self.adb.dump_ui_hierarchy(self.serial)
+        if not xml_content.strip():
+            return False
+
+        if self.config.RESOURCE_ID_ACTIVATE_WALLET in xml_content:
+            tap_x = int(self.screen_width * 0.38)
+            tap_y = int(self.screen_height * 0.421)
+            self.logger.info(
+                "Detected activate wallet prompt; tapping at "
+                f"({tap_x}, {tap_y})..."
+            )
+            self.adb.tap(self.serial, tap_x, tap_y)
+            return True
+
+        return False
 
 
 # ============================================================================
