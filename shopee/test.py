@@ -2061,8 +2061,8 @@ class ShopeeAutomation:
                 prompt_handled = self._tap_signup_prompt_if_present()
                 extra_taps -= 1
 
-            self.logger.info("Waiting 3s...")
-            time.sleep(3.0)
+            self.logger.info("Waiting 1s...")
+            time.sleep(1.0)
             self.logger.info("close app...")
             self.adb.shell(self.serial, ["am", "force-stop", self.config.APP_PACKAGE])
             self.logger.info("✓ Workflow completed successfully")
