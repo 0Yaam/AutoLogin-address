@@ -1,0 +1,37 @@
+--- old/test.py
++++ new/test.py
+@@ -569,10 +569,31 @@
+             XML string of UI hierarchy
+         """
+         # Trigger UI dump
+-        self.shell(serial, ["uiautomator", "dump", "/sdcard/uidump.xml"])
++        code, out, err = self.shell(serial, ["uiautomator", "dump", "/sdcard/uidump.xml"])
++        if code != 0:
++            self.logger.warning(f"uiautomator dump failed: {err.strip()}")
+         # Read dumped XML
+-        code, out, _ = self.shell(serial, ["cat", "/sdcard/uidump.xml"])
+-        return out if code == 0 else ""
++        code, out, err = self.shell(serial, ["cat", "/sdcard/uidump.xml"])
++        if code == 0 and out.strip():
++            return out
++
++        # Retry with compressed dump (some ROMs behave better)
++        code, out, err = self.shell(serial, ["uiautomator", "dump", "--compressed", "/sdcard/uidump.xml"])
++        if code != 0:
++            self.logger.warning(f"uiautomator dump --compressed failed: {err.strip()}")
++        code, out, err = self.shell(serial, ["cat", "/sdcard/uidump.xml"])
++        if code == 0 and out.strip():
++            return out
++
++        # Fallback to uiautomator2 dump if available
++        try:
++            import uiautomator2 as u2
++            d = u2.connect(serial)
++            xml = d.dump_hierarchy()
++            return xml or ""
++        except Exception as e:
++            self.logger.warning(f"uiautomator2 dump failed: {e}")
++        return ""
+ 
+ 
+ # ============================================================================

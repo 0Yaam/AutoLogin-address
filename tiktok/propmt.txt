@@ -1,0 +1,18 @@
+nhấn (0.734, 0.122), rồi nhấn (0.761, 0.138)
+rồi nhấn (0.251, 0.218) (note nút nhấn vào input name)
+rồi nhấn (0.922, 0.214) (note xóa all name)
+sau đó input tên (tên random, bất kì, ít nhấn 3 - 5 từ, có thể không nghĩa, có thể có nghĩa)
+rồi sau đó nhấn (0.385, 0.327) (note là input số điện thoại)
+rồi nhập random 9 số, hai số đầu tiên phải bắt đầu từ 1 trong các cái sau
+Viettel: 96, 97, 98, 86, 32, 33, 34, 35, 36, 37, 38, 39
+Mobifone: 90, 93, 89, 70, 76, 77, 78, 79
+Vinaphone: 91, 94, 88, 81, 82, 83, 84, 85
+sau khi nhập số xong thì nhấn (0.238, 0.967) (back)
+rồi wipe như bên testadress
+sau đó nhấn (0.322, 0.53) (note nhập địa chỉ)
+rồi nhập Phú Điền, Tân Phú, Đồng Nai rồi sleep 2s
+rồi nhấn (0.332, 0.234) (note là chọn địa chỉ)
+rồi nhấn (0.919, 0.169) (xóa địa chỉ)
+rồi nhập địa chỉ random vào, random ít nhất 20 từ vào
+rồi nhấn (0.234, 0.967) (note back)
+rồi nhấn (0.5, 0.908) (note lưu)

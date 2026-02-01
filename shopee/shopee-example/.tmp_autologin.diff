@@ -1,0 +1,120 @@
+--- old/autologin.py
++++ new/autologin.py
+@@ -228,7 +228,45 @@
+ 
+                 self.logger.info(f"Found {len(data['messages'])} messages. Searching for Shopee link...")
+ 
++                allowed_sender = "info@security.shopee.vn"
++                allowed_sender_lower = allowed_sender.lower()
++
++                def _extract_sender_blob(message: dict) -> str:
++                    candidates = []
++                    for key in (
++                        "from", "fromEmail", "from_email", "fromAddress", "from_address",
++                        "sender", "sender_email", "email_from", "mail_from", "fromName", "from_name"
++                    ):
++                        value = message.get(key)
++                        if isinstance(value, str):
++                            candidates.append(value)
++                        elif isinstance(value, dict):
++                            for subkey in ("email", "address", "value"):
++                                subval = value.get(subkey)
++                                if isinstance(subval, str):
++                                    candidates.append(subval)
++                    headers = message.get("headers")
++                    if isinstance(headers, str):
++                        candidates.append(headers)
++                    elif isinstance(headers, dict):
++                        header_from = headers.get("From") or headers.get("from")
++                        if isinstance(header_from, str):
++                            candidates.append(header_from)
++
++                    for cand in candidates:
++                        match = re.search(r'[\w\.\-\+]+@[\w\.\-]+\.\w+', cand)
++                        if match:
++                            return match.group(0)
++
++                    for cand in candidates:
++                        if cand:
++                            return cand
++                    return ""
++
+                 for msg in data['messages']:
++                    sender_blob = _extract_sender_blob(msg).lower()
++                    if allowed_sender_lower not in sender_blob:
++                        continue
+                     html_content = msg.get('message', '')
+                     match = re.search(r'https://vn\.shp\.ee/dlink/[a-zA-Z0-9]+', html_content)
+ 
+@@ -274,7 +312,7 @@
+         self._tap_ratio(0.705, 0.911, wait=1.75)
+         self._tap_ratio(0.235, 0.280, wait=0.3)
+         self.adb.input_text(self.serial, self.username)
+-        time.sleep(0.3)
++        time.sleep(1.2)
+ 
+         self._tap_ratio(0.237, 0.337, wait=0.3)
+         self.adb.input_text(self.serial, self.password)
+@@ -308,31 +346,49 @@
+                 ])
+                 
+                 # Wait for Chrome First Run button and tap it
++                fre_wait_start = time.time()
+                 self.logger.info("Waiting for Chrome First Run button...")
+                 chrome_fre_found = self._wait_and_tap_resource_id(
+                     "com.android.chrome:id/fre_bottom_group",
+                     fallback_ratio=(0.496, 0.885),
+                     timeout=30.0
+                 )
++                fre_tap_time = None
+                 if chrome_fre_found:
+                     self.logger.info("Tapped Chrome First Run button")
++                    fre_tap_time = time.time()
+                 else:
+                     self.logger.info("Chrome First Run button not found, tapping fallback coordinate")
+                     self._tap_ratio(0.496, 0.885)
+-                
+-                # Wait for Chrome location permission dialog
+-                self.logger.info("Waiting for Chrome location permission dialog...")
+-                location_dialog_found = self._wait_for_text(
+-                    "shopee.vn muốn sử dụng thông tin vị trí thiết bị của bạn",
+-                    timeout=60.0,
+-                    interval=1.0
+-                )
+-                if location_dialog_found:
+-                    self.logger.info("Chrome location dialog appeared, waiting 5s...")
+-                    time.sleep(2.5)
++                    fre_tap_time = time.time()
++
++                # Wait for Chrome activity + dialog container (max 6s from fre tap)
++                self.logger.info("Waiting for Chrome dialog container (9s from fre wait start)...")
++                chrome_dialog_found = False
++                xpath_dialog = '//*[@resource-id="com.android.chrome:id/tab_modal_dialog_container"]/android.widget.LinearLayout[1]'
++                dialog_deadline = (fre_tap_time or fre_wait_start) + 9.0
++                while time.time() < dialog_deadline:
++                    code, out, _ = self.adb.shell(self.serial, ["dumpsys", "activity", "activities"])
++                    if code == 0 and "org.chromium.chrome.browser.ChromeTabbedActivity" in out:
++                        elements = self.element_finder.find_by_xpath(self.serial, xpath_dialog)
++                        visible = [
++                            el for el in elements
++                            if el.is_visible(self.screen_width, self.screen_height)
++                        ]
++                        if visible:
++                            chrome_dialog_found = True
++                            break
++                    time.sleep(0.5)
++
++                if chrome_dialog_found:
++                    self.logger.info("Chrome dialog container found, tapping...")
++                    self._tap_ratio(0.606, 0.558)
++                    time.sleep(2.0)
++                    self._tap_ratio(0.504, 0.906)
++                    time.sleep(8.0)
+                 else:
+-                    self.logger.warning("Chrome location dialog not found, continuing anyway...")
+-                
++                    self.logger.warning("Chrome dialog container not found, continuing anyway...")
++
+                 # Return to Shopee app
+                 self.logger.info("Returning to Shopee app...")
+                 self.adb.launch_app(self.serial, self.config.APP_PACKAGE)
