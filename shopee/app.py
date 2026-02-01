@@ -1122,8 +1122,8 @@ def run_add_address_flow(adb, serial, screen_width: int, screen_height: int, add
     if not link_used:
         log_handler.warning("Address link empty. Skipping address flow.")
         return
-    log_handler.info("Waiting 3s after opening link...")
-    time.sleep(3.0)
+    log_handler.info("Waiting 5s after opening link...")
+    time.sleep(5.0)
     _run_add_address_flow(adb, serial, screen_width, screen_height, address)
 
 
