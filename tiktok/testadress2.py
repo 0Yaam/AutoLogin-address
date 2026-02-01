@@ -93,19 +93,14 @@ def random_address(min_words: int = 20) -> str:
         "tien", "binh", "an", "phat", "loc", "yen"
     ]
     count = max(min_words, random.randint(min_words, min_words + 5))
-    return " ".join(random.choice(words) for _ in range(count))
+    return " ".join(random.choice(words) for _ in range(count)) + " Phu Dien"
 
 
-def main():
-    serial = auto_detect_device_serial()
-    if not serial:
-        serial = input("Device serial (adb -s ...): ").strip()
-        if not serial:
-            log("Missing device serial.")
-            return
+def add_address_flow(device_serial: str, address_text: str = "", keep_alive: bool = False):
+    address_text = (address_text or "").strip() or "Phu Dien Tan Phu Dong Nai"
 
-    d = u2.connect(serial)
-    log(f"Connected: {serial}")
+    d = u2.connect(device_serial)
+    log(f"Connected: {device_serial}")
 
     # Open add address (second time)
     tap_ratio(d, 0.734, 0.122)
@@ -118,13 +113,13 @@ def main():
     time.sleep(0.4)
     tap_ratio(d, 0.922, 0.214)
     time.sleep(0.4)
-    input_text(serial, random_name())
+    input_text(device_serial, random_name())
     time.sleep(0.6)
 
     # Phone number
     tap_ratio(d, 0.385, 0.327)
     time.sleep(0.4)
-    input_text(serial, random_phone())
+    input_text(device_serial, random_phone())
     time.sleep(0.5)
     tap_ratio(d, 0.238, 0.967)
     time.sleep(0.6)
@@ -143,13 +138,13 @@ def main():
     # Address field
     tap_ratio(d, 0.322, 0.53)
     time.sleep(0.4)
-    input_text(serial, "Phu Dien, Tan Phu, Dong Nai")
+    input_text(device_serial, address_text)
     time.sleep(2)
     tap_ratio(d, 0.332, 0.234)
     time.sleep(0.4)
     tap_ratio(d, 0.919, 0.169)
     time.sleep(0.4)
-    input_text(serial, random_address(min_words=20))
+    input_text(device_serial, random_address(min_words=20))
     time.sleep(0.6)
 
     # Back and save
@@ -158,9 +153,21 @@ def main():
     tap_ratio(d, 0.5, 0.908)
     time.sleep(1)
 
-    log("Done. Pausing here.")
-    while True:
-        time.sleep(60)
+    log("Done.")
+    if keep_alive:
+        log("Pausing here.")
+        while True:
+            time.sleep(60)
+
+
+def main():
+    serial = auto_detect_device_serial()
+    if not serial:
+        serial = input("Device serial (adb -s ...): ").strip()
+        if not serial:
+            log("Missing device serial.")
+            return
+    add_address_flow(serial, keep_alive=True)
 
 
 if __name__ == "__main__":

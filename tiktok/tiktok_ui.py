@@ -12,6 +12,7 @@ from typing import Optional
 from nicegui import ui
 
 import tiktok_farm
+import testadress2
 
 
 class LogHandler:
@@ -200,6 +201,28 @@ def open_deeplink_only(link: str, status_label):
         automation = tiktok_farm.TikTokAutomation(device_serial)
         log_handler.info(f"Opening link: {link}")
         automation.open_url(link)
+    finally:
+        set_status(status_label, "ready")
+
+
+def run_add_address(address_text: str, status_label):
+    address_text = (address_text or "").strip()
+    device_key = tiktok_farm.Config.DEFAULT_DEVICE_KEY
+    pchanger = tiktok_farm.PchangerAPI()
+    log_handler.info("Getting device serial from Pchanger...")
+    device_serial = tiktok_farm.get_device_serial_from_key(pchanger, device_key)
+    if not device_serial:
+        log_handler.error("Cannot get device serial from Pchanger!")
+        return
+    if not pchanger.wait_for_device_ready(device_key):
+        log_handler.error("Device not ready, cannot add address.")
+        return
+    set_status(status_label, "running")
+    try:
+        log_handler.info(
+            f"Add address with: {address_text or 'Phu Dien Tan Phu Dong Nai'}"
+        )
+        testadress2.add_address_flow(device_serial, address_text)
     finally:
         set_status(status_label, "ready")
 
@@ -450,6 +473,20 @@ def create_ui():
                         ).classes("input-field link-input").props("outlined")
                         open_btn = ui.button("Open").classes("btn btn-start btn-open")
 
+                with ui.element("div").classes("card"):
+                    ui.html('<div class="card-title">Address</div>', sanitize=False)
+                    ui.html(
+                        '<div class="card-hint">Empty = Phu Dien Tan Phu Dong Nai</div>',
+                        sanitize=False,
+                    )
+                    with ui.element("div").classes("btn-row tight"):
+                        address_input = ui.input(
+                            placeholder="Nhap dia chi..."
+                        ).classes("input-field link-input").props("outlined")
+                        add_address_btn = ui.button("Add").classes(
+                            "btn btn-start btn-open"
+                        )
+
                 with ui.element("div").classes("btn-row"):
                     start_btn = ui.button("Start").classes("btn btn-start")
                     stop_btn = ui.button("Stop").classes("btn btn-clear")
@@ -486,6 +523,14 @@ def create_ui():
         start_btn.on("click", lambda: on_start())
         stop_btn.on("click", lambda: request_stop(status_label))
         open_btn.on("click", lambda: open_deeplink_only(link_input.value, status_label))
+        add_address_btn.on(
+            "click",
+            lambda: threading.Thread(
+                target=run_add_address,
+                args=(address_input.value, status_label),
+                daemon=True,
+            ).start(),
+        )
 
 
 def request_stop(status_label):
